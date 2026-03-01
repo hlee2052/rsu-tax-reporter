@@ -2,68 +2,34 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>CRA RSU Tax Tracker</title>
+    <title>CRA RSU Tracker</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        input:focus { background-color: rgba(99, 102, 241, 0.05) !important; outline: 2px solid #6366f1 !important; }
-        ::-webkit-calendar-picker-indicator { filter: invert(0.8); }
-    </style>
 </head>
-<body class="bg-[#0f172a] text-slate-200 p-4 md:p-8 font-sans">
+<body class="bg-[#0f172a] text-slate-200 p-8 font-sans">
     <div class="max-w-7xl mx-auto">
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
-            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                <h3 class="text-[10px] uppercase font-black text-slate-500 mb-2">Adjusted Cost Base Pool</h3>
-                <div class="flex justify-between items-end">
-                    <div>
-                        <span id="p-shares" class="text-3xl font-bold text-indigo-400">0</span>
-                        <span class="text-xs text-slate-500"> shares</span>
-                    </div>
-                    <div class="text-right font-mono">
-                        <div class="text-xs text-emerald-400">CAD Avg: $<span id="p-cad">0.00</span></div>
-                        <div class="text-[10px] text-slate-500">USD Avg: $<span id="p-usd">0.00</span></div>
-                    </div>
-                </div>
-            </div>
-            <div class="bg-slate-800 p-6 rounded-2xl border border-slate-700 shadow-xl">
-                <h3 class="text-[10px] uppercase font-black text-slate-500 mb-2">30-Day Isolation Tank</h3>
-                <div class="flex justify-between items-center">
-                    <span id="t-shares" class="text-3xl font-bold text-amber-400">0</span>
-                    <p class="text-[9px] text-slate-500 italic max-w-[120px] text-right">Protected from averaging for 30 days per CRA 7(1.31).</p>
-                </div>
-            </div>
-            <div class="bg-indigo-600 p-6 rounded-2xl shadow-2xl flex flex-col justify-center">
-                <h3 class="text-[10px] uppercase font-black text-indigo-100 mb-1">Total Position</h3>
-                <span id="tot-shares" class="text-4xl font-black text-white">0</span>
+        <div class="bg-indigo-900 text-white text-[10px] p-1 mb-4 rounded">DEBUG: VERSION 3.0 - FEE COLUMN ACTIVE</div>
+
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-2xl font-bold">RSU Ledger</h1>
+            <div class="flex gap-4">
+                <button onclick="addRow()" class="bg-slate-800 px-4 py-2 rounded border border-slate-600 font-bold">+ Add Row</button>
+                <button onclick="sync()" class="bg-indigo-500 px-6 py-2 rounded font-bold">Calculate</button>
             </div>
         </div>
 
-        <div class="flex justify-between items-center mb-6">
-            <h2 class="text-xl font-bold">Ledger</h2>
-            <div class="flex gap-3">
-                <button onclick="addRow()" class="bg-slate-800 hover:bg-slate-700 border border-slate-600 px-5 py-2 rounded-lg font-bold text-sm transition">+ Add Row</button>
-                <button onclick="sync()" class="bg-indigo-500 hover:bg-indigo-400 px-8 py-2 rounded-lg font-bold text-sm shadow-lg shadow-indigo-500/20 transition">Calculate Taxes</button>
-            </div>
-        </div>
-
-        <div class="bg-slate-800 rounded-2xl border border-slate-700 overflow-hidden shadow-2xl">
-            <table class="w-full text-left border-collapse">
-                <thead class="bg-slate-900/50 text-[10px] uppercase font-black text-slate-500 border-b border-slate-700">
+        <div class="bg-slate-800 rounded-xl border border-slate-700 overflow-x-auto">
+            <table class="w-full text-left">
+                <thead class="bg-slate-900 text-[10px] uppercase font-black text-slate-500">
                     <tr>
-                        <th class="p-5">Date</th>
-                        <th class="p-5">Type</th>
-                        <th class="p-5">USD Price</th>
-                        <th class="p-5 text-slate-400">USD:CAD</th>
-                        <th class="p-5">Shares</th>
-                        <th class="p-5 text-indigo-400">Proceeds (CAD)</th>
-                        <th class="p-5 text-emerald-400">Cost (ACB)</th>
-                        <th class="p-5">Audit Notes</th>
-                        <th class="p-5"></th>
-                    </tr>
+                        <th class="p-4">Date</th>
+                        <th class="p-4">Type</th>
+                        <th class="p-4">USD Price</th>
+                        <th class="p-4">FX</th>
+                        <th class="p-4">Shares</th>
+                        <th class="p-4 text-orange-400">FEE (USD)</th> <th class="p-4 text-indigo-400">Proceeds (CAD)</th> <th class="p-4 text-emerald-400">Cost (ACB)</th> <th class="p-4">Notes</th> <th class="p-4"></th> </tr>
                 </thead>
                 <tbody id="table-body" class="divide-y divide-slate-700/50"></tbody>
             </table>
-            <div id="empty" class="p-20 text-center text-slate-500 italic">No transactions added yet.</div>
         </div>
     </div>
 
@@ -71,14 +37,27 @@
         let rows = [];
 
         function addRow() {
-            document.getElementById('empty').style.display = 'none';
-            rows.push({ id: Date.now(), date: '', type: 'VEST', price: 0, shares: 0, fx: 0, proceeds: 0, acb: 0, notes: '' });
+            // Force the fee property to exist immediately
+            rows.push({
+                id: Date.now(),
+                date: '',
+                type: 'VEST',
+                price: 0,
+                shares: 0,
+                fee: 0,
+                fx: 0,
+                proceeds: 0,
+                acb: 0,
+                notes: ''
+            });
             render();
         }
 
         function updateLocal(id, field, value) {
             const r = rows.find(x => x.id === id);
-            if (r) r[field] = (field === 'price' || field === 'shares') ? parseFloat(value) || 0 : value;
+            if (r) {
+                r[field] = ['price', 'shares', 'fee'].includes(field) ? parseFloat(value) || 0 : value;
+            }
         }
 
         async function sync() {
@@ -89,45 +68,34 @@
             });
             const data = await res.json();
             rows = data.transactions;
-
-            document.getElementById('p-shares').innerText = data.summary.pool_shares;
-            document.getElementById('p-cad').innerText = data.summary.pool_avg_cad.toFixed(2);
-            document.getElementById('p-usd').innerText = data.summary.pool_avg_usd.toFixed(2);
-            document.getElementById('t-shares').innerText = data.summary.tank_shares;
-            document.getElementById('tot-shares').innerText = data.summary.total_shares;
-            render();
-        }
-
-        function removeRow(id) {
-            rows = rows.filter(r => r.id !== id);
-            if (!rows.length) document.getElementById('empty').style.display = 'block';
             render();
         }
 
         function render() {
             const body = document.getElementById('table-body');
-            body.innerHTML = rows.map(r => {
-                const fxStatus = r.fx ? r.fx.toFixed(4) : `<span class="text-rose-400 font-bold">MISSING</span>`;
-                const noteColor = r.notes.includes("ERROR") ? "text-rose-400 font-bold" : "text-slate-500 italic";
-                return `
-                <tr class="hover:bg-slate-700/30 group transition">
-                    <td class="p-3"><input type="date" value="${r.date}" onchange="updateLocal(${r.id}, 'date', this.value)" class="bg-slate-900 border border-slate-700 rounded p-2 text-xs w-full text-slate-200"></td>
-                    <td class="p-3">
-                        <select onchange="updateLocal(${r.id}, 'type', this.value)" class="bg-slate-900 text-[10px] font-bold p-2 rounded border border-slate-700 w-full">
+            body.innerHTML = rows.map(r => `
+                <tr class="hover:bg-slate-700/50 border-b border-slate-700">
+                    <td class="p-2"><input type="date" value="${r.date}" onchange="updateLocal(${r.id}, 'date', this.value)" class="bg-slate-900 p-1 text-xs rounded border border-slate-700 w-full text-white"></td>
+                    <td class="p-2">
+                        <select onchange="updateLocal(${r.id}, 'type', this.value)" class="bg-slate-900 p-1 text-xs rounded border border-slate-700 w-full text-white">
                             <option value="VEST" ${r.type==='VEST'?'selected':''}>VEST</option>
-                            <option value="AUTO_SALE" ${r.type==='AUTO_SALE'?'selected':''}>AUTO-SALE</option>
                             <option value="SALE" ${r.type==='SALE'?'selected':''}>SALE</option>
                         </select>
                     </td>
-                    <td class="p-3"><input type="number" step="0.01" value="${r.price}" oninput="updateLocal(${r.id}, 'price', this.value)" class="bg-transparent text-sm w-full font-mono p-2 rounded focus:ring-1 ring-indigo-500 border-none"></td>
-                    <td class="p-5 font-mono text-xs">${fxStatus}</td>
-                    <td class="p-3"><input type="number" value="${r.shares}" oninput="updateLocal(${r.id}, 'shares', this.value)" class="bg-transparent text-sm w-full font-mono p-2 rounded focus:ring-1 ring-indigo-500 border-none"></td>
-                    <td class="p-5 text-indigo-300 font-bold">$${(r.proceeds || 0).toLocaleString()}</td>
-                    <td class="p-5 text-emerald-400 font-bold">$${(r.acb || 0).toLocaleString()}</td>
-                    <td class="p-5 text-[10px] leading-tight ${noteColor}">${r.notes || '-'}</td>
-                    <td class="p-5 text-right"><button onclick="removeRow(${r.id})" class="text-rose-500 opacity-0 group-hover:opacity-100 hover:text-rose-400 text-xs font-bold transition">Delete</button></td>
-                </tr>`;
-            }).join('');
+                    <td class="p-2"><input type="number" step="0.01" value="${r.price}" oninput="updateLocal(${r.id}, 'price', this.value)" class="bg-transparent border-b border-slate-600 text-xs w-full p-1 text-white"></td>
+                    <td class="p-4 text-xs font-mono text-slate-500">${r.fx ? r.fx.toFixed(4) : '--'}</td>
+                    <td class="p-2"><input type="number" value="${r.shares}" oninput="updateLocal(${r.id}, 'shares', this.value)" class="bg-transparent border-b border-slate-600 text-xs w-full p-1 text-white"></td>
+
+                    <td class="p-2">
+                        <input type="number" step="0.01" value="${r.fee}" oninput="updateLocal(${r.id}, 'fee', this.value)"
+                        class="bg-slate-900/50 border-b border-orange-500 text-orange-400 text-xs w-full p-1" placeholder="0.00">
+                    </td>
+
+                    <td class="p-4 text-xs font-bold text-indigo-300">$${(r.proceeds || 0).toFixed(2)}</td>
+                    <td class="p-4 text-xs font-bold text-emerald-400">$${(r.acb || 0).toFixed(2)}</td>
+                    <td class="p-4 text-[9px] text-slate-500 italic">${r.notes || '-'}</td>
+                    <td class="p-4 text-right"><button onclick="this.closest('tr').remove()" class="text-rose-500">✕</button></td>
+                </tr>`).join('');
         }
     </script>
 </body>
