@@ -1,128 +1,100 @@
+from flask import Flask, request, jsonify
 import requests
-from flask import Flask, render_template, request, jsonify
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Cache for FX rates to avoid redundant API calls
-fx_cache = {}
-
 
 def get_fx_rate(date_str):
-    if not date_str or date_str in fx_cache:
-        return fx_cache.get(date_str)
-
-    target_date = datetime.strptime(date_str, '%Y-%m-%d')
-    # CRA Rule: Use the rate from the nearest preceding business day for weekends/holidays
-    for i in range(5):
-        check_date = (target_date - timedelta(days=i)).strftime('%Y-%m-%d')
-        try:
-            url = f"https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?start_date={check_date}&end_date={check_date}"
-            response = requests.get(url, timeout=5).json()
-            if response.get('observations'):
-                rate = float(response['observations'][0]['FXUSDCAD']['v'])
-                fx_cache[date_str] = rate
-                return rate
-        except Exception:
-            continue
-    return None
-
-
-@app.route('/')
-def index():
-    return render_template('index.html')
+    """Fetches USD/CAD for the EXACT date. Raises Exception if unavailable."""
+    url = f"https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?start_date={date_str}&end_date={date_str}"
+    try:
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        if not data.get('observations'):
+            raise ValueError(f"No FX rate found for {date_str} (Weekend/Holiday).")
+        return float(data['observations'][0]['FXUSDCAD']['v'])
+    except Exception as e:
+        raise Exception(f"FX Fetch Failed for {date_str}: {str(e)}")
 
 
 @app.route('/sync', methods=['POST'])
 def sync():
-    data = request.json
-    transactions = sorted([t for t in data if t.get('date')], key=lambda x: x['date'])
+    transactions = request.json
+    tank = []  # Shares < 30 days old (Tracked individually)
+    pool_shares = 0  # Shares > 30 days old (Pooled)
+    pool_acb_cad = 0.0
+    processed = []
 
-    holding_tank = []  # Shares < 30 days old
-    pool_shares = 0
-    pool_total_cost_cad = 0.0
-    pool_total_cost_usd = 0.0
+    # Sort by date to ensure chronological processing
+    transactions.sort(key=lambda x: x['date'])
 
-    results = []
+    for tx in transactions:
+        date_obj = datetime.strptime(tx['date'], '%Y-%m-%d')
+        fx = get_fx_rate(tx['date'])
+        price_cad = tx['price'] * fx
 
-    for item in transactions:
-        date_obj = datetime.strptime(item['date'], '%Y-%m-%d')
-        shares = int(item.get('shares') or 0)
-        usd_price = float(item.get('price') or 0)
-
-        # 1. Fetch/Update FX
-        fx = get_fx_rate(item['date'])
-        item['fx'] = fx
-        if fx is None:
-            item['notes'] = "ERROR: FX Rate not found."
-            results.append({**item, "proceeds": 0, "acb": 0, "gain": 0})
-            continue
-
-        cad_price = usd_price * fx
-
-        # 2. Graduation: Move shares >30 days old from Tank to Pool
-        new_tank = []
-        for v in holding_tank:
-            if (date_obj - v['date']).days > 30:
-                pool_shares += v['shares']
-                pool_total_cost_cad += (v['shares'] * v['price_cad'])
-                pool_total_cost_usd += (v['shares'] * v['price_usd'])
+        # 1. MOVE AGED SHARES FROM TANK TO POOL
+        # Any share in the tank older than 30 days relative to THIS transaction moves to Pool
+        remaining_tank = []
+        for unit in tank:
+            age = (date_obj - unit['date']).days
+            if age > 30:
+                pool_shares += unit['shares']
+                pool_acb_cad += unit['shares'] * unit['price_cad']
             else:
-                new_tank.append(v)
-        holding_tank = new_tank
+                remaining_tank.append(unit)
+        tank = remaining_tank
 
-        res = {**item, "proceeds": 0, "acb": 0, "gain": 0, "notes": ""}
-
-        if item['type'] == 'VEST':
-            holding_tank.append({
-                'date': date_obj, 'shares': shares,
-                'price_cad': cad_price, 'price_usd': usd_price
+        # 2. PROCESS TRANSACTION
+        if tx['type'] == 'VEST':
+            tank.append({
+                'date': date_obj,
+                'shares': tx['shares'],
+                'price_cad': price_cad
             })
-            res['notes'] = "Added to 30-day isolation tank."
-        else:
-            # SALE Logic: Match Tank first (1:1 cost), then Pool (Weighted Average)
-            to_sell = shares
-            total_acb = 0
-            res['proceeds'] = round(cad_price * shares, 2)
+            tx['notes'] = f"Added {tx['shares']} to Tank. FX: {fx}"
+            tx['gain'] = 0
 
-            # Match against Tank (Subsection 7(1.31))
-            for v in holding_tank:
-                if to_sell <= 0: break
-                if 0 <= (date_obj - v['date']).days <= 30:
-                    taken = min(to_sell, v['shares'])
-                    total_acb += (taken * v['price_cad'])
-                    v['shares'] -= taken
-                    to_sell -= taken
-                    res['notes'] += f"Matched {taken} shs to {v['date'].strftime('%m/%d')} vest. "
+        elif tx['type'] in ['SALE', 'AUTO_SALE']:
+            req_shares = tx['shares']
+            total_cost_cad = 0.0
+            notes = []
 
-            # Match against Pool
-            if to_sell > 0:
+            # Step A: Drain Tank First (FIFO within the 30-day window)
+            for unit in tank:
+                if req_shares <= 0: break
+                take = min(unit['shares'], req_shares)
+                total_cost_cad += take * unit['price_cad']
+                unit['shares'] -= take
+                req_shares -= take
+                notes.append(f"Matched {take} from Tank (Vest {unit['date'].date()})")
+
+            tank = [u for u in tank if u['shares'] > 0]
+
+            # Step B: Drain Pool if Tank is empty
+            if req_shares > 0:
                 if pool_shares > 0:
-                    avg_cad = pool_total_cost_cad / pool_shares
-                    total_acb += (to_sell * avg_cad)
-                    # Proportionally reduce pool totals
-                    pool_total_cost_usd -= (to_sell * (pool_total_cost_usd / pool_shares))
-                    pool_total_cost_cad -= (to_sell * avg_cad)
-                    pool_shares -= to_sell
-                    res['notes'] += f"Used {to_sell} shs from Pool."
-                else:
-                    res['notes'] = "ERROR: No shares available in Pool or Tank!"
+                    avg_cost = pool_acb_cad / pool_shares
+                    take = min(pool_shares, req_shares)
+                    total_cost_cad += take * avg_cost
+                    pool_shares -= take
+                    pool_acb_cad -= take * avg_cost
+                    req_shares -= take
+                    notes.append(f"Took {take} from Pool (Avg Cost: ${avg_cost:.4f})")
 
-            res['acb'] = round(total_acb, 2)
-            res['gain'] = round(res['proceeds'] - res['acb'], 2)
+            if req_shares > 0:
+                notes.append(f"!!! INSUFFICIENT SHARES: Missing {req_shares}")
 
-        results.append(res)
+            proceeds_cad = tx['shares'] * price_cad
+            tx['gain'] = round(proceeds_cad - total_cost_cad, 2)
+            tx['notes'] = " | ".join(notes)
 
-    summary = {
-        "pool_shares": pool_shares,
-        "pool_avg_cad": round(pool_total_cost_cad / pool_shares, 2) if pool_shares > 0 else 0,
-        "pool_avg_usd": round(pool_total_cost_usd / pool_shares, 2) if pool_shares > 0 else 0,
-        "tank_shares": sum(v['shares'] for v in holding_tank),
-        "total_shares": pool_shares + sum(v['shares'] for v in holding_tank)
-    }
+        processed.append(tx)
 
-    return jsonify({"transactions": results, "summary": summary})
+    return jsonify({"transactions": processed})
 
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True)
