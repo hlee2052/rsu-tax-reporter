@@ -105,12 +105,15 @@ def sync():
             if req_shares > 0:
                 notes.append(f"!!! SHORT {req_shares} SHARES")
 
-            proceeds_cad = tx['shares'] * price_cad
-            tx['proceeds'] = round(proceeds_cad, 2)
+            # --- THE FIX FOR HAND CALCULATION MATCHING ---
+            gross_proceeds_cad = tx['shares'] * price_cad
+            net_proceeds_cad = gross_proceeds_cad - fee_cad  # Subtract fee from proceeds
+
+            tx['proceeds'] = round(net_proceeds_cad, 2)  # Now matches your "Net" hand calc
             tx['acb'] = round(total_cost_cad, 2)
 
-            # CRA GAIN = PROCEEDS (CAD) - ACB (CAD) - FEE (CAD)
-            tx['gain'] = round(proceeds_cad - total_cost_cad - fee_cad, 2)
+            # Gain = Net Proceeds - Cost
+            tx['gain'] = round(net_proceeds_cad - total_cost_cad, 2)
             tx['notes'] = " | ".join(notes)
 
         processed.append(tx)
